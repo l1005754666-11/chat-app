@@ -5,40 +5,30 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
-const sqlite3 = require('sqlite3').verbose();
 
-// ========== SQLite Setup ==========
-const dbPath = path.join(__dirname, 'chat.db');
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error('[DB] Failed to open database:', err.message);
-    process.exit(1);
-  }
-  console.log('[DB] SQLite connected');
-});
+// ========== JSON Database ==========
+const DATA_DIR = path.join(__dirname, 'data');
+const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
+const MAX_MESSAGES = 5000;
 
-// Initialize tables
-db.run(`
-  CREATE TABLE IF NOT EXISTS messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    roomId TEXT DEFAULT 'general',
-    userId TEXT NOT NULL,
-    userName TEXT NOT NULL,
-    type TEXT NOT NULL DEFAULT 'text',
-    content TEXT,
-    fileUrl TEXT,
-    fileName TEXT,
-    fileSize INTEGER,
-    mimeType TEXT,
-    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`, (err) => {
-  if (err) console.error('[DB] Create table error:', err);
-  else {
-    db.run('CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(roomId, createdAt DESC)');
-    console.log('[DB] Tables ready');
-  }
-});
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function loadMessages() {
+  try {
+    if (fs.existsSync(MESSAGES_FILE)) {
+      return JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
+    }
+  } catch (e) { console.error('[DB] Load error:', e.message); }
+  return [];
+}
+
+function saveMessages(messages) {
+  try {
+    fs.writeFileSync(MESSAGES_FILE, JSON.stringify(messages, null, 0));
+  } catch (e) { console.error('[DB] Save error:', e.message); }
+}
+
+let messages = loadMessages();
 
 // ========== Config ==========
 const PORT = process.env.PORT || 3000;
@@ -59,9 +49,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Uploads directory
 const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
 // ========== File Upload ==========
@@ -80,9 +68,7 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const blockedExts = ['.exe', '.bat', '.cmd', '.sh', '.php', '.jsp', '.asp', '.dll', '.scr', '.com', '.vbs', '.js', '.jar'];
     const ext = path.extname(file.originalname).toLowerCase();
-    if (blockedExts.includes(ext)) {
-      return cb(new Error('不安全的文件类型'));
-    }
+    if (blockedExts.includes(ext)) return cb(new Error('不安全的文件类型'));
     cb(null, true);
   }
 });
@@ -108,32 +94,17 @@ app.get('/api/messages', (req, res) => {
   const before = req.query.before ? parseInt(req.query.before) : null;
   const limit = Math.min(parseInt(req.query.limit) || 50, 100);
 
-  let sql = 'SELECT * FROM messages WHERE roomId = ?';
-  const params = [roomId];
+  let filtered = messages.filter(m => m.roomId === roomId);
+  if (before) filtered = filtered.filter(m => m.id < before);
 
-  if (before) {
-    sql += ' AND id < ?';
-    params.push(before);
-  }
-
-  sql += ' ORDER BY createdAt DESC LIMIT ?';
-  params.push(limit);
-
-  db.all(sql, params, (err, rows) => {
-    if (err) {
-      console.error('[API] Get messages error:', err);
-      return res.status(500).json({ success: false, error: '数据库错误' });
-    }
-    res.json({ success: true, messages: rows.reverse() });
-  });
+  const result = filtered.slice(-limit);
+  res.json({ success: true, messages: result });
 });
 
 // File upload
 app.post('/api/upload', upload.single('file'), (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: '没有文件' });
-    }
+    if (!req.file) return res.status(400).json({ success: false, error: '没有文件' });
 
     const isImage = req.file.mimetype.startsWith('image/');
     const fileUrl = `/uploads/${req.file.filename}`;
@@ -160,9 +131,7 @@ app.use((err, req, res, next) => {
     }
     return res.status(400).json({ success: false, error: err.message });
   }
-  if (err) {
-    return res.status(400).json({ success: false, error: err.message });
-  }
+  if (err) return res.status(400).json({ success: false, error: err.message });
   next();
 });
 
@@ -188,27 +157,16 @@ io.on('connection', (socket) => {
     const safeName = sanitizeHtml(userName?.slice(0, 20)) || `用户${socket.id.slice(0, 6)}`;
     const safeUserId = String(userId || `guest-${socket.id.slice(0, 8)}`).slice(0, 50);
 
-    const user = {
+    users.set(socket.id, {
       socketId: socket.id,
       userId: safeUserId,
       userName: safeName,
       joinedAt: new Date().toISOString()
-    };
-    users.set(socket.id, user);
+    });
 
     // Send recent messages
-    db.all(
-      'SELECT * FROM messages WHERE roomId = ? ORDER BY createdAt DESC LIMIT 100',
-      ['general'],
-      (err, rows) => {
-        if (err) {
-          console.error('[Socket] Load history error:', err);
-          socket.emit('messageHistory', []);
-        } else {
-          socket.emit('messageHistory', rows.reverse());
-        }
-      }
-    );
+    const recent = messages.filter(m => m.roomId === 'general').slice(-100);
+    socket.emit('messageHistory', recent);
 
     // Notify
     socket.broadcast.emit('userJoined', {
@@ -229,32 +187,25 @@ io.on('connection', (socket) => {
       : (content || '');
     const safeFileName = fileName ? sanitizeHtml(String(fileName).slice(0, 255)) : null;
 
-    db.run(
-      'INSERT INTO messages (roomId, userId, userName, type, content, fileUrl, fileName, fileSize, mimeType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ['general', userId, userName, safeType, safeContent, fileUrl || null, safeFileName, fileSize || null, mimeType || null],
-      function(err) {
-        if (err) {
-          console.error('[Socket] Save message error:', err);
-          return socket.emit('messageError', { error: '消息保存失败' });
-        }
+    const message = {
+      id: Date.now(),
+      roomId: 'general',
+      userId,
+      userName,
+      type: safeType,
+      content: safeContent,
+      fileUrl: fileUrl || null,
+      fileName: safeFileName,
+      fileSize: fileSize || null,
+      mimeType: mimeType || null,
+      createdAt: new Date().toISOString()
+    };
 
-        const message = {
-          id: this.lastID,
-          roomId: 'general',
-          userId,
-          userName,
-          type: safeType,
-          content: safeContent,
-          fileUrl: fileUrl || null,
-          fileName: safeFileName,
-          fileSize: fileSize || null,
-          mimeType: mimeType || null,
-          createdAt: new Date().toISOString()
-        };
+    messages.push(message);
+    if (messages.length > MAX_MESSAGES) messages = messages.slice(-MAX_MESSAGES);
+    saveMessages(messages);
 
-        io.emit('newMessage', message);
-      }
-    );
+    io.emit('newMessage', message);
   });
 
   socket.on('typing', ({ userId, isTyping }) => {
