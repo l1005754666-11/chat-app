@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>在线聊天室</title>
+  <title>团队聊天室</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,120 +11,138 @@
   <div id="loginModal" class="modal">
     <div class="modal-content">
       <div class="login-header">
-        <svg class="icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-        </svg>
-        <h2>欢迎加入聊天室</h2>
+        <div class="login-avatar" id="loginAvatar"></div>
+        <h2>加入团队聊天</h2>
+        <p>输入你的昵称开始聊天</p>
       </div>
       <div class="login-form">
-        <div class="avatar-preview" id="avatarPreview"></div>
         <input type="text" id="usernameInput" placeholder="输入你的昵称" maxlength="20" autofocus>
-        <button id="joinBtn" class="btn-primary">
-          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4M10 17l5-5-5-5M13.8 12H3"/>
-          </svg>
-          进入聊天室
-        </button>
+        <button id="joinBtn" class="btn-primary">进入聊天室</button>
       </div>
     </div>
   </div>
 
   <!-- Image Preview Modal -->
   <div id="imageModal" class="modal image-modal hidden">
-    <div class="modal-content image-modal-content">
+    <div class="image-modal-content">
       <button class="close-btn" id="closeImageModal">
-        <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M18 6L6 18M6 6l12 12"/>
-        </svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
       <img id="previewImage" src="" alt="Preview">
     </div>
   </div>
 
-  <!-- Main Chat App -->
-  <div id="chatApp" class="chat-app hidden">
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <h3>
-          <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/>
-            <circle cx="9" cy="7" r="4"/>
-            <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/>
-          </svg>
-          在线用户
-        </h3>
-        <span class="user-count" id="userCount">0</span>
-      </div>
-      <div class="user-list" id="userList"></div>
-      <div class="sidebar-footer">
-        <div class="current-user" id="currentUser"></div>
-      </div>
-    </aside>
-
-    <!-- Chat Area -->
-    <main class="chat-area">
-      <!-- Header -->
-      <header class="chat-header">
-        <button class="sidebar-toggle" id="sidebarToggle">
-          <svg class="icon-md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M3 12h18M3 6h18M3 18h18"/>
-          </svg>
+  <!-- Edit Name Modal -->
+  <div id="editNameModal" class="modal hidden">
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h3>修改昵称</h3>
+        <button class="modal-close" id="closeEditModal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
-        <div class="header-title">
-          <svg class="icon-md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-          </svg>
-          <span>在线聊天室</span>
-        </div>
-        <div class="header-status">
-          <span class="status-dot online"></span>
-          <span id="onlineCount">0 人在线</span>
-        </div>
-      </header>
+      </div>
+      <div class="modal-body">
+        <input type="text" id="editNameInput" placeholder="新昵称" maxlength="20">
+        <button id="saveNameBtn" class="btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
 
-      <!-- Messages -->
-      <div class="messages-container" id="messagesContainer">
-        <div class="welcome-message">
-          <div class="welcome-content">
-            <svg class="icon-xl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
-              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-            </svg>
-            <p>欢迎来到聊天室！</p>
-            <span>发送消息开始聊天吧</span>
+  <!-- Main App -->
+  <div id="chatApp" class="chat-app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-top">
+        <div class="brand">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          <span>团队聊天</span>
+        </div>
+
+        <div class="my-profile">
+          <div class="my-avatar" id="myAvatar"></div>
+          <div class="my-info">
+            <div class="my-name" id="myName">访客</div>
+            <button class="my-edit" id="editNameBtn">修改昵称</button>
           </div>
         </div>
       </div>
 
-      <!-- Typing Indicator -->
-      <div class="typing-indicator hidden" id="typingIndicator">
-        <span id="typingText"></span>
-        <div class="typing-dots">
-          <span></span><span></span><span></span>
+      <div class="sidebar-section">
+        <div class="section-title">
+          <span>在线成员</span>
+          <span class="section-count" id="onlineCount">0</span>
+        </div>
+        <div class="user-list" id="userList"></div>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Header -->
+      <header class="chat-header">
+        <button class="sidebar-toggle" id="sidebarToggle">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <div class="header-center">
+          <div class="room-name">团队聊天室</div>
+          <div class="connection-status" id="connectionStatus">
+            <span class="status-dot connecting"></span>
+            <span class="status-text">连接中...</span>
+          </div>
+        </div>
+        <div class="header-actions"></div>
+      </header>
+
+      <!-- Messages -->
+      <div class="messages-wrapper">
+        <div class="messages-container" id="messagesContainer">
+          <div class="welcome-message">
+            <div class="welcome-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+            </div>
+            <p class="welcome-title">欢迎来到团队聊天室</p>
+            <p class="welcome-desc">发送消息开始与团队沟通</p>
+          </div>
+        </div>
+
+        <!-- Typing Indicator -->
+        <div class="typing-indicator hidden" id="typingIndicator">
+          <span id="typingText"></span>
+          <div class="typing-dots"><span></span><span></span><span></span></div>
         </div>
       </div>
 
       <!-- Input Area -->
       <footer class="input-area">
         <div class="input-toolbar">
-          <button class="toolbar-btn" id="imageBtn" title="发送图片">
-            <svg class="icon-md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="18" rx="2"/>
-              <circle cx="8.5" cy="8.5" r="1.5"/>
-              <path d="M21 15l-5-5L5 21"/>
-            </svg>
+          <button class="toolbar-btn" id="fileBtn" title="发送文件">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
           </button>
-          <input type="file" id="imageInput" accept="image/*" hidden>
+          <button class="toolbar-btn" id="imageBtn" title="发送图片">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </button>
+          <input type="file" id="fileInput" hidden>
         </div>
+
+        <!-- File Preview -->
+        <div class="file-preview hidden" id="filePreview">
+          <div class="file-preview-info">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+            <span class="file-preview-name" id="filePreviewName"></span>
+            <span class="file-preview-size" id="filePreviewSize"></span>
+          </div>
+          <button class="file-preview-remove" id="filePreviewRemove">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
         <div class="input-row">
           <div class="text-input-wrapper">
-            <input type="text" id="messageInput" placeholder="输入消息..." autocomplete="off" maxlength="500">
+            <textarea id="messageInput" placeholder="输入消息..." rows="1" maxlength="500"></textarea>
             <span class="char-count" id="charCount">0/500</span>
           </div>
           <button class="send-btn" id="sendBtn" title="发送">
-            <svg class="icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
-            </svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
           </button>
         </div>
       </footer>
