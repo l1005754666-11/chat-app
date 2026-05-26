@@ -5,36 +5,40 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
+const sqlite3 = require('sqlite3').verbose();
 
 // ========== SQLite Setup ==========
-let db;
-try {
-  const Database = require('better-sqlite3');
-  db = new Database(path.join(__dirname, 'chat.db'));
-  db.pragma('journal_mode = WAL');
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS messages (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      roomId TEXT DEFAULT 'general',
-      userId TEXT NOT NULL,
-      userName TEXT NOT NULL,
-      type TEXT NOT NULL DEFAULT 'text',
-      content TEXT,
-      fileUrl TEXT,
-      fileName TEXT,
-      fileSize INTEGER,
-      mimeType TEXT,
-      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-    CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(roomId, createdAt DESC);
-  `);
+const dbPath = path.join(__dirname, 'chat.db');
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('[DB] Failed to open database:', err.message);
+    process.exit(1);
+  }
   console.log('[DB] SQLite connected');
-} catch (err) {
-  console.error('[DB] Failed to initialize SQLite:', err.message);
-  console.error('[DB] Run: npm install better-sqlite3');
-  process.exit(1);
-}
+});
+
+// Initialize tables
+db.run(`
+  CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    roomId TEXT DEFAULT 'general',
+    userId TEXT NOT NULL,
+    userName TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'text',
+    content TEXT,
+    fileUrl TEXT,
+    fileName TEXT,
+    fileSize INTEGER,
+    mimeType TEXT,
+    createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`, (err) => {
+  if (err) console.error('[DB] Create table error:', err);
+  else {
+    db.run('CREATE INDEX IF NOT EXISTS idx_messages_room_created ON messages(roomId, createdAt DESC)');
+    console.log('[DB] Tables ready');
+  }
+});
 
 // ========== Config ==========
 const PORT = process.env.PORT || 3000;
@@ -100,28 +104,28 @@ app.get('/', (req, res) => {
 
 // Get messages with pagination
 app.get('/api/messages', (req, res) => {
-  try {
-    const roomId = req.query.roomId || 'general';
-    const before = req.query.before ? parseInt(req.query.before) : null;
-    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+  const roomId = req.query.roomId || 'general';
+  const before = req.query.before ? parseInt(req.query.before) : null;
+  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
 
-    let sql = 'SELECT * FROM messages WHERE roomId = ?';
-    const params = [roomId];
+  let sql = 'SELECT * FROM messages WHERE roomId = ?';
+  const params = [roomId];
 
-    if (before) {
-      sql += ' AND id < ?';
-      params.push(before);
-    }
-
-    sql += ' ORDER BY createdAt DESC LIMIT ?';
-    params.push(limit);
-
-    const rows = db.prepare(sql).all(...params);
-    res.json({ success: true, messages: rows.reverse() });
-  } catch (err) {
-    console.error('[API] Get messages error:', err);
-    res.status(500).json({ success: false, error: '数据库错误' });
+  if (before) {
+    sql += ' AND id < ?';
+    params.push(before);
   }
+
+  sql += ' ORDER BY createdAt DESC LIMIT ?';
+  params.push(limit);
+
+  db.all(sql, params, (err, rows) => {
+    if (err) {
+      console.error('[API] Get messages error:', err);
+      return res.status(500).json({ success: false, error: '数据库错误' });
+    }
+    res.json({ success: true, messages: rows.reverse() });
+  });
 });
 
 // File upload
@@ -193,15 +197,18 @@ io.on('connection', (socket) => {
     users.set(socket.id, user);
 
     // Send recent messages
-    try {
-      const rows = db.prepare(
-        'SELECT * FROM messages WHERE roomId = ? ORDER BY createdAt DESC LIMIT 100'
-      ).all('general');
-      socket.emit('messageHistory', rows.reverse());
-    } catch (err) {
-      console.error('[Socket] Load history error:', err);
-      socket.emit('messageHistory', []);
-    }
+    db.all(
+      'SELECT * FROM messages WHERE roomId = ? ORDER BY createdAt DESC LIMIT 100',
+      ['general'],
+      (err, rows) => {
+        if (err) {
+          console.error('[Socket] Load history error:', err);
+          socket.emit('messageHistory', []);
+        } else {
+          socket.emit('messageHistory', rows.reverse());
+        }
+      }
+    );
 
     // Notify
     socket.broadcast.emit('userJoined', {
@@ -222,31 +229,32 @@ io.on('connection', (socket) => {
       : (content || '');
     const safeFileName = fileName ? sanitizeHtml(String(fileName).slice(0, 255)) : null;
 
-    try {
-      const result = db.prepare(`
-        INSERT INTO messages (roomId, userId, userName, type, content, fileUrl, fileName, fileSize, mimeType)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run('general', userId, userName, safeType, safeContent, fileUrl || null, safeFileName, fileSize || null, mimeType || null);
+    db.run(
+      'INSERT INTO messages (roomId, userId, userName, type, content, fileUrl, fileName, fileSize, mimeType) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ['general', userId, userName, safeType, safeContent, fileUrl || null, safeFileName, fileSize || null, mimeType || null],
+      function(err) {
+        if (err) {
+          console.error('[Socket] Save message error:', err);
+          return socket.emit('messageError', { error: '消息保存失败' });
+        }
 
-      const message = {
-        id: result.lastInsertRowid,
-        roomId: 'general',
-        userId,
-        userName,
-        type: safeType,
-        content: safeContent,
-        fileUrl: fileUrl || null,
-        fileName: safeFileName,
-        fileSize: fileSize || null,
-        mimeType: mimeType || null,
-        createdAt: new Date().toISOString()
-      };
+        const message = {
+          id: this.lastID,
+          roomId: 'general',
+          userId,
+          userName,
+          type: safeType,
+          content: safeContent,
+          fileUrl: fileUrl || null,
+          fileName: safeFileName,
+          fileSize: fileSize || null,
+          mimeType: mimeType || null,
+          createdAt: new Date().toISOString()
+        };
 
-      io.emit('newMessage', message);
-    } catch (err) {
-      console.error('[Socket] Save message error:', err);
-      socket.emit('messageError', { error: '消息保存失败' });
-    }
+        io.emit('newMessage', message);
+      }
+    );
   });
 
   socket.on('typing', ({ userId, isTyping }) => {
