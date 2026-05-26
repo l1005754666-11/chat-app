@@ -75,13 +75,20 @@ function saveJsonMessages() {
 }
 
 // DB helpers
+function toIsoString(val) {
+  if (!val) return new Date().toISOString();
+  if (val instanceof Date) return val.toISOString();
+  if (typeof val === 'string') return val;
+  return new Date().toISOString();
+}
+
 async function saveMessage(msg) {
   if (useMongo && MessageModel) {
     const doc = new MessageModel(msg);
     await doc.save();
-    return { ...msg, id: doc._id.toString(), createdAt: doc.createdAt };
+    return { ...msg, id: doc._id.toString(), createdAt: toIsoString(doc.createdAt) };
   } else {
-    const entry = { ...msg, id: Date.now() };
+    const entry = { ...msg, id: Date.now(), createdAt: new Date().toISOString() };
     jsonMessages.push(entry);
     if (jsonMessages.length > MAX_MESSAGES) jsonMessages = jsonMessages.slice(-MAX_MESSAGES);
     saveJsonMessages();
@@ -106,7 +113,7 @@ async function getMessages(roomId, before, limit) {
       fileSize: d.fileSize,
       mimeType: d.mimeType,
       clientId: d.clientId,
-      createdAt: d.createdAt.toISOString()
+      createdAt: toIsoString(d.createdAt)
     })).reverse();
   } else {
     let filtered = jsonMessages.filter(m => m.roomId === roomId);
@@ -130,7 +137,7 @@ async function getRecentMessages(roomId, limit) {
       fileSize: d.fileSize,
       mimeType: d.mimeType,
       clientId: d.clientId,
-      createdAt: d.createdAt.toISOString()
+      createdAt: toIsoString(d.createdAt)
     })).reverse();
   } else {
     return jsonMessages.filter(m => m.roomId === roomId).slice(-limit);
@@ -262,7 +269,7 @@ io.on('connection', (socket) => {
   console.log('[Socket] Connected:', socket.id);
 
   socket.on('join', async ({ userId, userName }) => {
-    const safeName = sanitizeHtml(userName?.slice(0, 20)) || `用户${socket.id.slice(0, 6)}`;
+    const safeName = sanitizeHtml(userName?.slice(0, 20)) || `访客${socket.id.slice(0, 6)}`;
     const safeUserId = String(userId || `guest-${socket.id.slice(0, 8)}`).slice(0, 50);
 
     users.set(socket.id, {
