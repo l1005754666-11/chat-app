@@ -24,6 +24,11 @@ if (!fs.existsSync(uploadsDir)) {
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(uploadsDir));
 
+// Explicit root route to ensure index.html is served
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
 // Store connected users
 const users = new Map();
 const messageHistory = [];
