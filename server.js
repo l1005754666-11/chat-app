@@ -177,9 +177,12 @@ io.on('connection', (socket) => {
     io.emit('userList', getOnlineUsers());
   });
 
-  socket.on('sendMessage', ({ userId, userName, type, content, fileUrl, fileName, fileSize, mimeType }) => {
+  socket.on('sendMessage', ({ userId, userName, type, content, fileUrl, fileName, fileSize, mimeType }, callback) => {
     const user = users.get(socket.id);
-    if (!user) return;
+    if (!user) {
+      if (typeof callback === 'function') callback({ error: '未登录' });
+      return;
+    }
 
     const safeType = ['text', 'image', 'file'].includes(type) ? type : 'text';
     const safeContent = safeType === 'text'
@@ -206,6 +209,7 @@ io.on('connection', (socket) => {
     saveMessages(messages);
 
     io.emit('newMessage', message);
+    if (typeof callback === 'function') callback({ success: true });
   });
 
   socket.on('typing', ({ userId, isTyping }) => {
