@@ -177,7 +177,7 @@ io.on('connection', (socket) => {
     io.emit('userList', getOnlineUsers());
   });
 
-  socket.on('sendMessage', ({ userId, userName, type, content, fileUrl, fileName, fileSize, mimeType }, callback) => {
+  socket.on('sendMessage', ({ userId, userName, type, content, fileUrl, fileName, fileSize, mimeType, clientId }, callback) => {
     const user = users.get(socket.id);
     if (!user) {
       if (typeof callback === 'function') callback({ error: '未登录' });
@@ -192,6 +192,7 @@ io.on('connection', (socket) => {
 
     const message = {
       id: Date.now(),
+      clientId: clientId || null,
       roomId: 'general',
       userId,
       userName,

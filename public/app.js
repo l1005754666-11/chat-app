@@ -13,6 +13,10 @@ function generateGuestId() {
   return 'guest_' + Math.random().toString(36).substr(2, 10) + Date.now().toString(36).substr(-4);
 }
 
+function generateClientId() {
+  return 'c_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 5);
+}
+
 function getOrCreateUser() {
   let user = userStore.get();
   if (!user) {
@@ -66,6 +70,7 @@ let isSending = false;
 let oldestMessageId = null;
 let hasMoreHistory = true;
 let typingTimeout = null;
+let heartbeatInterval = null;
 
 // ========== Avatar Color ==========
 function getAvatarColor(seed) {
@@ -133,6 +138,23 @@ function updateConnectionStatus(status) {
   text.textContent = labels[status] || status;
 }
 
+// ========== Heartbeat ==========
+function startHeartbeat() {
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
+  heartbeatInterval = setInterval(() => {
+    if (socket.connected) {
+      socket.emit('ping');
+    }
+  }, 25000);
+}
+
+function stopHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
+
 // ========== Login ==========
 function showLogin() {
   els.loginModal.classList.remove('hidden');
@@ -193,9 +215,8 @@ function initChat() {
     socket.emit('join', { userId: user.userId, userName: user.userName });
   }
 
-  // Load history via API
   loadHistory();
-
+  startHeartbeat();
   els.messageInput.focus();
 }
 
@@ -213,19 +234,19 @@ async function loadHistory(before = null) {
     }
 
     if (before) {
-      // Prepend older messages
       const scrollHeight = els.messagesContainer.scrollHeight;
-      msgs.reverse().forEach(msg => {
+      msgs.forEach(msg => {
+        if (msg.id && els.messagesContainer.querySelector(`[data-msg-id="${msg.id}"]`)) return;
         const el = createMessageElement(msg);
         els.messagesContainer.insertBefore(el, els.messagesContainer.firstChild);
       });
       const newScrollHeight = els.messagesContainer.scrollHeight;
       els.messagesContainer.scrollTop = newScrollHeight - scrollHeight;
     } else {
-      // Initial load
       const welcome = els.messagesContainer.querySelector('.welcome-message');
       if (welcome) welcome.remove();
       msgs.forEach(msg => {
+        if (msg.id && els.messagesContainer.querySelector(`[data-msg-id="${msg.id}"]`)) return;
         els.messagesContainer.appendChild(createMessageElement(msg));
       });
       scrollToBottom();
@@ -242,7 +263,6 @@ function scrollToBottom() {
   els.messagesContainer.scrollTop = els.messagesContainer.scrollHeight;
 }
 
-// Scroll to load more
 els.messagesContainer.addEventListener('scroll', () => {
   if (els.messagesContainer.scrollTop < 50 && hasMoreHistory && oldestMessageId) {
     loadHistory(oldestMessageId);
@@ -258,32 +278,29 @@ function createMessageElement(msg, opts = {}) {
   group.className = `message-group ${isOwn ? 'own' : ''} ${isSystem ? 'system' : ''}`;
   if (opts.tempId) group.dataset.tempId = opts.tempId;
   if (msg.id) group.dataset.msgId = msg.id;
+  if (msg.clientId) group.dataset.clientId = msg.clientId;
 
   if (isSystem) {
     group.innerHTML = `<div class="msg-bubble">${escapeHtml(msg.content || '')}</div>`;
     return group;
   }
 
-  // Avatar
   const avatar = document.createElement('div');
   avatar.className = 'msg-avatar';
   renderAvatar(avatar, msg.userName, 34);
 
-  // Body
   const body = document.createElement('div');
   body.className = 'msg-body';
 
-  // Meta
   const meta = document.createElement('div');
   meta.className = 'msg-meta';
   meta.innerHTML = `<span class="msg-author">${escapeHtml(msg.userName)}</span><span class="msg-time">${formatTime(msg.createdAt)}</span>`;
   body.appendChild(meta);
 
-  // Content
   if (msg.type === 'text') {
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
-    bubble.innerHTML = escapeHtml(msg.content || '').replace(/\n/g, '<br>');
+    bubble.textContent = msg.content || '';
     body.appendChild(bubble);
   } else if (msg.type === 'image') {
     const img = document.createElement('img');
@@ -295,11 +312,10 @@ function createMessageElement(msg, opts = {}) {
   } else if (msg.type === 'file') {
     const card = document.createElement('div');
     card.className = 'file-card';
-    const isImg = msg.mimeType && msg.mimeType.startsWith('image/');
     card.innerHTML = `
-      <div class="file-icon">${isImg
-        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>'
-        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>'}</div>
+      <div class="file-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+      </div>
       <div class="file-info">
         <div class="file-name">${escapeHtml(msg.fileName || '文件')}</div>
         <div class="file-size">${formatFileSize(msg.fileSize || 0)}</div>
@@ -311,12 +327,11 @@ function createMessageElement(msg, opts = {}) {
     body.appendChild(card);
   }
 
-  // Status (for own messages)
   if (isOwn && opts.status) {
     const statusEl = document.createElement('div');
     statusEl.className = 'msg-status ' + opts.status;
     if (opts.status === 'sending') {
-      statusEl.innerHTML = '发送中...';
+      statusEl.textContent = '发送中...';
     } else if (opts.status === 'failed') {
       statusEl.innerHTML = '<span>发送失败</span><button class="retry-btn">重试</button>';
       statusEl.querySelector('.retry-btn').onclick = () => retryMessage(group, msg);
@@ -346,10 +361,9 @@ async function sendMessage() {
   isSending = true;
   els.sendBtn.disabled = true;
 
-  const tempId = 'temp_' + Date.now();
+  const clientId = generateClientId();
   let fileData = null;
 
-  // Upload file if pending
   if (pendingFile) {
     try {
       const formData = new FormData();
@@ -374,35 +388,28 @@ async function sendMessage() {
     fileUrl: fileData ? fileData.fileUrl : null,
     fileName: fileData ? fileData.fileName : null,
     fileSize: fileData ? fileData.fileSize : null,
-    mimeType: fileData ? fileData.mimeType : null
+    mimeType: fileData ? fileData.mimeType : null,
+    clientId
   };
 
-  // Show temp message
   const welcome = els.messagesContainer.querySelector('.welcome-message');
   if (welcome) welcome.remove();
 
-  const tempMsg = {
-    ...msgData,
-    id: null,
-    createdAt: new Date().toISOString()
-  };
-  const tempEl = createMessageElement(tempMsg, { tempId, status: 'sending' });
+  const tempMsg = { ...msgData, id: null, createdAt: new Date().toISOString() };
+  const tempEl = createMessageElement(tempMsg, { tempId: clientId, status: 'sending' });
   els.messagesContainer.appendChild(tempEl);
   scrollToBottom();
 
-  // Clear input
   els.messageInput.value = '';
   els.charCount.textContent = '0/500';
   autoResizeTextarea();
   clearFilePreview();
 
-  // Send via socket
   socket.emit('sendMessage', msgData, (ack) => {
     isSending = false;
     els.sendBtn.disabled = false;
 
     if (ack && ack.error) {
-      // Mark as failed
       const statusEl = tempEl.querySelector('.msg-status');
       if (statusEl) {
         statusEl.className = 'msg-status failed';
@@ -410,10 +417,6 @@ async function sendMessage() {
         statusEl.querySelector('.retry-btn').onclick = () => retryMessage(tempEl, msgData);
       }
       showToast('发送失败: ' + ack.error, 'error');
-    } else {
-      // Success - status will be updated when newMessage event fires
-      const statusEl = tempEl.querySelector('.msg-status');
-      if (statusEl) statusEl.remove();
     }
   });
 }
@@ -423,22 +426,16 @@ function retryMessage(el, msgData) {
   isSending = false;
   els.sendBtn.disabled = false;
 
-  // Restore content
-  if (msgData.type === 'text') {
-    els.messageInput.value = msgData.content;
-  }
-
-  // Re-send
-  const tempId = 'temp_' + Date.now();
+  const newClientId = generateClientId();
   const welcome = els.messagesContainer.querySelector('.welcome-message');
   if (welcome) welcome.remove();
 
-  const tempMsg = { ...msgData, id: null, createdAt: new Date().toISOString() };
-  const tempEl = createMessageElement(tempMsg, { tempId, status: 'sending' });
+  const tempMsg = { ...msgData, clientId: newClientId, id: null, createdAt: new Date().toISOString() };
+  const tempEl = createMessageElement(tempMsg, { tempId: newClientId, status: 'sending' });
   els.messagesContainer.appendChild(tempEl);
   scrollToBottom();
 
-  socket.emit('sendMessage', msgData, (ack) => {
+  socket.emit('sendMessage', { ...msgData, clientId: newClientId }, (ack) => {
     isSending = false;
     els.sendBtn.disabled = false;
     if (ack && ack.error) {
@@ -446,11 +443,8 @@ function retryMessage(el, msgData) {
       if (statusEl) {
         statusEl.className = 'msg-status failed';
         statusEl.innerHTML = '<span>发送失败</span><button class="retry-btn">重试</button>';
-        statusEl.querySelector('.retry-btn').onclick = () => retryMessage(tempEl, msgData);
+        statusEl.querySelector('.retry-btn').onclick = () => retryMessage(tempEl, { ...msgData, clientId: newClientId });
       }
-    } else {
-      const statusEl = tempEl.querySelector('.msg-status');
-      if (statusEl) statusEl.remove();
     }
   });
 }
@@ -469,7 +463,6 @@ els.messageInput.addEventListener('input', () => {
   const len = els.messageInput.value.length;
   els.charCount.textContent = `${len}/500`;
 
-  // Typing indicator
   socket.emit('typing', { userId: user.userId, isTyping: true });
   clearTimeout(typingTimeout);
   typingTimeout = setTimeout(() => {
@@ -552,11 +545,11 @@ els.messagesContainer.addEventListener('drop', e => {
   els.messagesContainer.style.background = '';
   for (const file of e.dataTransfer.files) {
     handleFileSelect(file);
-    break; // Only first file
+    break;
   }
 });
 
-// Paste
+// Paste (images only)
 els.messageInput.addEventListener('paste', e => {
   for (const item of e.clipboardData.items) {
     if (item.type.startsWith('image/')) {
@@ -611,6 +604,7 @@ socket.on('connect', () => {
   if (user.userName) {
     socket.emit('join', { userId: user.userId, userName: user.userName });
   }
+  startHeartbeat();
 });
 
 socket.on('connecting', () => {
@@ -619,13 +613,14 @@ socket.on('connecting', () => {
 
 socket.on('disconnect', () => {
   updateConnectionStatus('disconnected');
-  showToast('连接已断开，正在重连...', 'error');
+  stopHeartbeat();
 });
 
 socket.on('reconnect', () => {
   updateConnectionStatus('connected');
   showToast('已重新连接');
   loadHistory();
+  startHeartbeat();
 });
 
 socket.on('messageHistory', (history) => {
@@ -634,7 +629,6 @@ socket.on('messageHistory', (history) => {
     if (welcome) welcome.remove();
 
     history.forEach(msg => {
-      // Check if already rendered
       if (msg.id && els.messagesContainer.querySelector(`[data-msg-id="${msg.id}"]`)) return;
       els.messagesContainer.appendChild(createMessageElement(msg));
     });
@@ -643,19 +637,13 @@ socket.on('messageHistory', (history) => {
 });
 
 socket.on('newMessage', (msg) => {
-  // Remove temp message for this user
-  if (msg.userId === user.userId) {
-    const temps = els.messagesContainer.querySelectorAll('[data-temp-id]');
-    temps.forEach(el => {
-      // Match by content similarity
-      const bubble = el.querySelector('.msg-bubble');
-      if (bubble && msg.type === 'text' && bubble.textContent === msg.content) {
-        el.remove();
-      }
-    });
+  // Remove temp message by clientId (exact match)
+  if (msg.clientId) {
+    const temp = els.messagesContainer.querySelector(`[data-temp-id="${msg.clientId}"]`);
+    if (temp) temp.remove();
   }
 
-  // Check if already rendered
+  // Avoid duplicate
   if (msg.id && els.messagesContainer.querySelector(`[data-msg-id="${msg.id}"]`)) return;
 
   const welcome = els.messagesContainer.querySelector('.welcome-message');
@@ -706,7 +694,6 @@ socket.on('messageError', (data) => {
 
 // ========== Init ==========
 if (user.userName) {
-  // Auto login
   els.loginModal.classList.add('hidden');
   initChat();
 } else {
