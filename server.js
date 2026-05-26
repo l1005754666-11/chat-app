@@ -6,29 +6,136 @@ const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
 
-// ========== JSON Database ==========
+// ========== Database Setup ==========
+let dbReady = false;
+let MessageModel = null;
+let useMongo = false;
+
+// Try MongoDB first
+const MONGODB_URI = process.env.MONGODB_URI;
+
+if (MONGODB_URI) {
+  try {
+    const mongoose = require('mongoose');
+    const messageSchema = new mongoose.Schema({
+      roomId: { type: String, default: 'general' },
+      userId: { type: String, required: true },
+      userName: { type: String, required: true },
+      type: { type: String, default: 'text' },
+      content: { type: String },
+      fileUrl: { type: String },
+      fileName: { type: String },
+      fileSize: { type: Number },
+      mimeType: { type: String },
+      clientId: { type: String },
+      createdAt: { type: Date, default: Date.now }
+    });
+    messageSchema.index({ roomId: 1, createdAt: -1 });
+    MessageModel = mongoose.model('Message', messageSchema);
+
+    mongoose.connect(MONGODB_URI)
+      .then(() => {
+        console.log('[DB] MongoDB connected');
+        dbReady = true;
+        useMongo = true;
+      })
+      .catch(err => {
+        console.error('[DB] MongoDB failed, falling back to JSON:', err.message);
+        initJsonDb();
+      });
+  } catch (e) {
+    console.error('[DB] Mongoose not available, using JSON:', e.message);
+    initJsonDb();
+  }
+} else {
+  initJsonDb();
+}
+
+// JSON fallback
 const DATA_DIR = path.join(__dirname, 'data');
 const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
 const MAX_MESSAGES = 5000;
+let jsonMessages = [];
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-function loadMessages() {
+function initJsonDb() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
   try {
     if (fs.existsSync(MESSAGES_FILE)) {
-      return JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
+      jsonMessages = JSON.parse(fs.readFileSync(MESSAGES_FILE, 'utf8'));
     }
-  } catch (e) { console.error('[DB] Load error:', e.message); }
-  return [];
+  } catch (e) { console.error('[DB] JSON load error:', e.message); }
+  dbReady = true;
+  console.log('[DB] JSON database ready (' + jsonMessages.length + ' messages)');
 }
 
-function saveMessages(messages) {
+function saveJsonMessages() {
   try {
-    fs.writeFileSync(MESSAGES_FILE, JSON.stringify(messages, null, 0));
-  } catch (e) { console.error('[DB] Save error:', e.message); }
+    fs.writeFileSync(MESSAGES_FILE, JSON.stringify(jsonMessages, null, 0));
+  } catch (e) { console.error('[DB] JSON save error:', e.message); }
 }
 
-let messages = loadMessages();
+// DB helpers
+async function saveMessage(msg) {
+  if (useMongo && MessageModel) {
+    const doc = new MessageModel(msg);
+    await doc.save();
+    return { ...msg, id: doc._id.toString(), createdAt: doc.createdAt };
+  } else {
+    const entry = { ...msg, id: Date.now() };
+    jsonMessages.push(entry);
+    if (jsonMessages.length > MAX_MESSAGES) jsonMessages = jsonMessages.slice(-MAX_MESSAGES);
+    saveJsonMessages();
+    return entry;
+  }
+}
+
+async function getMessages(roomId, before, limit) {
+  if (useMongo && MessageModel) {
+    const query = { roomId };
+    if (before) query._id = { $lt: before };
+    const docs = await MessageModel.find(query).sort({ createdAt: -1 }).limit(limit).lean();
+    return docs.map(d => ({
+      id: d._id.toString(),
+      roomId: d.roomId,
+      userId: d.userId,
+      userName: d.userName,
+      type: d.type,
+      content: d.content,
+      fileUrl: d.fileUrl,
+      fileName: d.fileName,
+      fileSize: d.fileSize,
+      mimeType: d.mimeType,
+      clientId: d.clientId,
+      createdAt: d.createdAt.toISOString()
+    })).reverse();
+  } else {
+    let filtered = jsonMessages.filter(m => m.roomId === roomId);
+    if (before) filtered = filtered.filter(m => m.id < before);
+    return filtered.slice(-limit);
+  }
+}
+
+async function getRecentMessages(roomId, limit) {
+  if (useMongo && MessageModel) {
+    const docs = await MessageModel.find({ roomId }).sort({ createdAt: -1 }).limit(limit).lean();
+    return docs.map(d => ({
+      id: d._id.toString(),
+      roomId: d.roomId,
+      userId: d.userId,
+      userName: d.userName,
+      type: d.type,
+      content: d.content,
+      fileUrl: d.fileUrl,
+      fileName: d.fileName,
+      fileSize: d.fileSize,
+      mimeType: d.mimeType,
+      clientId: d.clientId,
+      createdAt: d.createdAt.toISOString()
+    })).reverse();
+  } else {
+    return jsonMessages.filter(m => m.roomId === roomId).slice(-limit);
+  }
+}
 
 // ========== Config ==========
 const PORT = process.env.PORT || 3000;
@@ -89,16 +196,17 @@ app.get('/', (req, res) => {
 });
 
 // Get messages with pagination
-app.get('/api/messages', (req, res) => {
-  const roomId = req.query.roomId || 'general';
-  const before = req.query.before ? parseInt(req.query.before) : null;
-  const limit = Math.min(parseInt(req.query.limit) || 50, 100);
-
-  let filtered = messages.filter(m => m.roomId === roomId);
-  if (before) filtered = filtered.filter(m => m.id < before);
-
-  const result = filtered.slice(-limit);
-  res.json({ success: true, messages: result });
+app.get('/api/messages', async (req, res) => {
+  try {
+    const roomId = req.query.roomId || 'general';
+    const before = req.query.before || null;
+    const limit = Math.min(parseInt(req.query.limit) || 50, 100);
+    const messages = await getMessages(roomId, before, limit);
+    res.json({ success: true, messages });
+  } catch (err) {
+    console.error('[API] Get messages error:', err);
+    res.status(500).json({ success: false, error: '数据库错误' });
+  }
 });
 
 // File upload
@@ -153,7 +261,7 @@ function getOnlineUsers() {
 io.on('connection', (socket) => {
   console.log('[Socket] Connected:', socket.id);
 
-  socket.on('join', ({ userId, userName }) => {
+  socket.on('join', async ({ userId, userName }) => {
     const safeName = sanitizeHtml(userName?.slice(0, 20)) || `用户${socket.id.slice(0, 6)}`;
     const safeUserId = String(userId || `guest-${socket.id.slice(0, 8)}`).slice(0, 50);
 
@@ -165,8 +273,13 @@ io.on('connection', (socket) => {
     });
 
     // Send recent messages
-    const recent = messages.filter(m => m.roomId === 'general').slice(-100);
-    socket.emit('messageHistory', recent);
+    try {
+      const recent = await getRecentMessages('general', 100);
+      socket.emit('messageHistory', recent);
+    } catch (err) {
+      console.error('[Socket] Load history error:', err);
+      socket.emit('messageHistory', []);
+    }
 
     // Notify
     socket.broadcast.emit('userJoined', {
@@ -177,7 +290,7 @@ io.on('connection', (socket) => {
     io.emit('userList', getOnlineUsers());
   });
 
-  socket.on('sendMessage', ({ userId, userName, type, content, fileUrl, fileName, fileSize, mimeType, clientId }, callback) => {
+  socket.on('sendMessage', async ({ userId, userName, type, content, fileUrl, fileName, fileSize, mimeType, clientId }, callback) => {
     const user = users.get(socket.id);
     if (!user) {
       if (typeof callback === 'function') callback({ error: '未登录' });
@@ -190,27 +303,44 @@ io.on('connection', (socket) => {
       : (content || '');
     const safeFileName = fileName ? sanitizeHtml(String(fileName).slice(0, 255)) : null;
 
-    const message = {
-      id: Date.now(),
-      clientId: clientId || null,
-      roomId: 'general',
-      userId,
-      userName,
-      type: safeType,
-      content: safeContent,
-      fileUrl: fileUrl || null,
-      fileName: safeFileName,
-      fileSize: fileSize || null,
-      mimeType: mimeType || null,
-      createdAt: new Date().toISOString()
-    };
+    try {
+      const msgData = {
+        roomId: 'general',
+        userId,
+        userName,
+        type: safeType,
+        content: safeContent,
+        fileUrl: fileUrl || null,
+        fileName: safeFileName,
+        fileSize: fileSize || null,
+        mimeType: mimeType || null,
+        clientId: clientId || null
+      };
 
-    messages.push(message);
-    if (messages.length > MAX_MESSAGES) messages = messages.slice(-MAX_MESSAGES);
-    saveMessages(messages);
+      const saved = await saveMessage(msgData);
 
-    io.emit('newMessage', message);
-    if (typeof callback === 'function') callback({ success: true });
+      const message = {
+        id: saved.id,
+        clientId: saved.clientId,
+        roomId: saved.roomId,
+        userId: saved.userId,
+        userName: saved.userName,
+        type: saved.type,
+        content: saved.content,
+        fileUrl: saved.fileUrl,
+        fileName: saved.fileName,
+        fileSize: saved.fileSize,
+        mimeType: saved.mimeType,
+        createdAt: saved.createdAt
+      };
+
+      io.emit('newMessage', message);
+      if (typeof callback === 'function') callback({ success: true });
+    } catch (err) {
+      console.error('[Socket] Save message error:', err);
+      socket.emit('messageError', { error: '消息保存失败' });
+      if (typeof callback === 'function') callback({ error: '保存失败' });
+    }
   });
 
   socket.on('typing', ({ userId, isTyping }) => {
@@ -236,5 +366,6 @@ io.on('connection', (socket) => {
 // ========== Start Server ==========
 server.listen(PORT, HOST, () => {
   console.log(`\n[Server] Chat server running on http://localhost:${PORT}`);
+  console.log(`[Server] Storage: ${useMongo ? 'MongoDB' : 'JSON file'}`);
   console.log(`[Server] Environment: ${process.env.NODE_ENV || 'development'}\n`);
 });
